@@ -3,9 +3,9 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import os
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Flask app configuration
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 app = Flask(__name__)
 
@@ -18,10 +18,15 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 
+# --------------------------------------------------------------------------
+# Constants
+# --------------------------------------------------------------------------
 
-# ------------------------------------------------------------------------------
+VALID_CARD_TYPES = {"flashcard", "summary", "quiz", "task", "usecase", "mindmap"}
+
+# --------------------------------------------------------------------------
 # Database models
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 class Topic(db.Model):
     __tablename__ = "topics"
@@ -60,9 +65,9 @@ class Card(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Dummy content generator (placeholder instead of OpenAI)
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 def generate_dummy_content(topic: str, card_type: str) -> str:
     """
@@ -84,23 +89,24 @@ def generate_dummy_content(topic: str, card_type: str) -> str:
     else:
         return f"Generic content for {topic} (type: {card_type})."
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Simple health endpoint
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Topics endpoints
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 @app.route("/topics", methods=["GET"])
 def list_topics():
     topics = Topic.query.all()
     data = [t.to_dict() for t in topics]
     return jsonify(data), 200
+
 
 @app.route("/topics", methods=["POST"])
 def create_topic():
@@ -125,6 +131,14 @@ def create_topic():
 
     if not isinstance(formats, list) or not formats:
         return jsonify({"error": "Formats must be a non-empty list"}), 400
+
+    # validate requested card types
+    for f in formats:
+        if f not in VALID_CARD_TYPES:
+            return jsonify({
+                "error": f"Invalid card_type in formats: '{f}'",
+                "allowed_types": list(VALID_CARD_TYPES),
+            }), 400
 
     # Check if topic already exists
     existing = Topic.query.filter_by(name=topic_name).first()
@@ -179,9 +193,103 @@ def list_topic_cards(topic_id: int):
     data = [c.to_dict() for c in cards]
     return jsonify(data), 200
 
-# ------------------------------------------------------------------------------
+@app.route("/topics/<int:topic_id>/cards", methods=["GET"])
+def get_topic_cards(topic_id):
+    """
+    Get all cards for a specific topic.
+    Optional: ?type=summary to filter by card_type.
+    """
+    topic = Topic.query.get(topic_id)
+    if topic is None:
+        return jsonify({"error": "Topic not found"}), 404
+
+    card_type = request.args.get("type")
+
+    query = Card.query.filter_by(topic_id=topic_id)
+
+    if card_type:
+        if card_type not in VALID_CARD_TYPES:
+            return jsonify({
+                "error": "Invalid card_type",
+                "allowed_types": list(VALID_CARD_TYPES),
+            }), 400
+        query = query.filter_by(card_type=card_type)
+
+    cards = query.all()
+    return jsonify([c.to_dict() for c in cards]), 200
+
+# --------------------------------------------------------------------------
+# Cards endpoints (global)
+# --------------------------------------------------------------------------
+
+@app.route("/cards", methods=["GET"])
+def get_cards():
+    """
+    Get all cards globally.
+    Optional: ?type=summary to filter by card_type.
+    """
+    card_type = request.args.get("type")
+
+    query = Card.query
+    if card_type:
+        if card_type not in VALID_CARD_TYPES:
+            return jsonify({
+                "error": "Invalid card_type",
+                "allowed_types": list(VALID_CARD_TYPES),
+            }), 400
+        query = query.filter_by(card_type=card_type)
+
+    cards = query.all()
+    return jsonify([c.to_dict() for c in cards]), 200
+
+
+@app.route("/cards/<int:card_id>", methods=["PUT"])
+def update_card(card_id):
+    """
+    Update an existing card (card_type and/or content).
+    """
+    card = Card.query.get(card_id)
+    if card is None:
+        return jsonify({"error": "Card not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+
+    new_card_type = data.get("card_type")
+    new_content = data.get("content")
+
+    if new_card_type is not None:
+        if new_card_type not in VALID_CARD_TYPES:
+            return jsonify({
+                "error": "Invalid card_type",
+                "allowed_types": list(VALID_CARD_TYPES),
+            }), 400
+        card.card_type = new_card_type
+
+    if new_content is not None:
+        card.content = new_content
+
+    db.session.commit()
+
+    return jsonify(card.to_dict()), 200
+
+
+@app.route("/cards/<int:card_id>", methods=["DELETE"])
+def delete_card(card_id):
+    """
+    Delete a card by ID.
+    """
+    card = Card.query.get(card_id)
+    if card is None:
+        return jsonify({"error": "Card not found"}), 404
+
+    db.session.delete(card)
+    db.session.commit()
+
+    return jsonify({"status": "deleted", "id": card_id}), 200
+
+# --------------------------------------------------------------------------
 # App entrypoint
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 if __name__ == "__main__":
     # Create the SQLite tables if they don't exist yet
