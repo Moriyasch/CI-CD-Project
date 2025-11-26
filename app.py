@@ -156,6 +156,28 @@ def create_topic():
     }
     return jsonify(response), 201
 
+@app.route("/topics/<int:topic_id>/cards", methods=["GET"])
+def list_topic_cards(topic_id: int):
+    """
+    Return all cards for a given topic.
+    Optional query param:
+    ?type=flashcard / summary / quiz / task / usecase / mindmap
+    """
+    # קודם בודקים שהנושא קיים
+    topic = Topic.query.get(topic_id)
+    if not topic:
+        return jsonify({"error": "Topic not found"}), 404
+
+    # אפשרות לפילטר לפי card_type
+    card_type = request.args.get("type")
+
+    if card_type:
+        cards = Card.query.filter_by(topic_id=topic_id, card_type=card_type).all()
+    else:
+        cards = Card.query.filter_by(topic_id=topic_id).all()
+
+    data = [c.to_dict() for c in cards]
+    return jsonify(data), 200
 
 # ------------------------------------------------------------------------------
 # App entrypoint
